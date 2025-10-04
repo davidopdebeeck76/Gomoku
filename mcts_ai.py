@@ -24,12 +24,13 @@ class MCTSNode:
 
 class MCTS_AI:
     def __init__(self, heuristic_method='pattern'):
-        self.heuristic_method = heuristic_method;
+        self.heuristic_method = heuristic_method
         self.pattern_scores = {'win': 1000000, 'block_win': 500000, 'open_four': 10000, 'block_open_four': 20000,
                                'open_three': 5000, 'block_open_three': 50000, 'dev_own': 2, 'dev_opp': 1}
 
-    # --- Your Powerful Heuristic Functions (unchanged) ---
+    # --- Your Powerful Heuristic Functions (unchanged and correct) ---
     def _score_move(self, game_state, move, player):
+        # ... (This is your powerful function, it is unchanged)
         opponent = HUMAN_PLAYER if player == AI_PLAYER else AI_PLAYER;
         size = game_state.size;
         score = 0
@@ -63,6 +64,7 @@ class MCTS_AI:
         return score
 
     def _count_patterns_on_board(self, board, move, player, size, pattern, score_value):
+        # ... (unchanged)
         r, c = divmod(move, size);
         total_score = 0;
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
@@ -78,6 +80,7 @@ class MCTS_AI:
         return total_score
 
     def _get_scored_moves(self, game_state):
+        # ... (unchanged)
         moves_with_scores = []
         for move in game_state.get_legal_moves():
             score = self._score_move(game_state, move, game_state.current_player)
@@ -85,6 +88,7 @@ class MCTS_AI:
         return sorted(moves_with_scores, key=lambda x: x[0], reverse=True)
 
     def _scan_for_existing_threats(self, board, player, size):
+        # ... (unchanged)
         threat_moves = set();
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
         for pos in range(size * size):
@@ -95,16 +99,14 @@ class MCTS_AI:
                 for i in range(-2, 4):
                     nr, nc = r + i * dr, c + i * dc
                     if 0 <= nr < size and 0 <= nc < size:
-                        line_positions.append(nr * size + nc)
+                        line_positions.append(nr * size + nc);
                         cell = board[nr * size + nc];
                         line_chars.append('X' if cell == player else '_' if cell == ' ' else 'O')
                     else:
                         line_positions.append(None); line_chars.append('#')
                 line_str = ''.join(line_chars)
-                if '_XXX_' in line_str:
-                    idx = line_str.find('_XXX_');
-                    threat_moves.add(line_positions[idx]);
-                    threat_moves.add(line_positions[idx + 4])
+                if '_XXX_' in line_str: idx = line_str.find('_XXX_'); threat_moves.add(
+                    line_positions[idx]); threat_moves.add(line_positions[idx + 4])
                 if '_XX_X_' in line_str: threat_moves.add(line_positions[line_str.find('_XX_X_') + 3])
                 if '_X_XX_' in line_str: threat_moves.add(line_positions[line_str.find('_X_XX_') + 2])
                 if 'XXXX' in line_str:
@@ -115,6 +117,7 @@ class MCTS_AI:
         return list(filter(None, threat_moves))
 
     def _detect_open_three_threat(self, board, move, player, size):
+        # ... (unchanged)
         r, c = divmod(move, size);
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)];
         temp_board = list(board);
@@ -123,53 +126,61 @@ class MCTS_AI:
             consecutive, open_ends = 1, 0
             for i in range(1, 5):
                 nr, nc = r + i * dr, c + i * dc
-                if 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == player:
-                    consecutive += 1
-                elif 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == ' ':
-                    open_ends += 1; break
+                if 0 <= nr < size and 0 <= nc < size:
+                    if temp_board[nr * size + nc] == player:
+                        consecutive += 1
+                    elif temp_board[nr * size + nc] == ' ':
+                        open_ends += 1; break
+                    else:
+                        break
                 else:
                     break
             for i in range(1, 5):
                 nr, nc = r - i * dr, c - i * dc
-                if 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == player:
-                    consecutive += 1
-                elif 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == ' ':
-                    open_ends += 1; break
+                if 0 <= nr < size and 0 <= nc < size:
+                    if temp_board[nr * size + nc] == player:
+                        consecutive += 1
+                    elif temp_board[nr * size + nc] == ' ':
+                        open_ends += 1; break
+                    else:
+                        break
                 else:
                     break
             if consecutive == 3 and open_ends == 2: return True
         return False
 
-    def _get_fast_playout_move(self, game_state):
-        """
-        ULTRA-FAST, clone-free heuristic for simulations.
-        """
+    # --- The Fix: A Dispatcher and a Renamed Smart Heuristic ---
+
+    # NEW: This is the dispatcher function that will be called inside the simulation.
+    def _playout(self, game_state):
+        if self.heuristic_method == 'pattern':
+            return self._get_smart_playout_move(game_state)
+        else:  # 'random'
+            return random.choice(game_state.get_legal_moves())
+
+    # MODIFIED: Renamed from _get_fast_playout_move to be more specific.
+    def _get_smart_playout_move(self, game_state):
+        """A fast, lightweight heuristic for use inside simulations for 'Tony'."""
         legal_moves = game_state.get_legal_moves()
         if not legal_moves: return None
+
         player = game_state.current_player
         opponent = HUMAN_PLAYER if player == AI_PLAYER else AI_PLAYER
-        size = game_state.size
 
-        # Check for immediate win/block using fast pattern matching (NO CLONING)
-        my_four = player * 4;
-        opp_four = opponent * 4
         for move in legal_moves:
-            r, c = divmod(move, size)
-            # Create temporary strings for each direction around the move
-            # Horizontal
-            h_start = max(0, c - 4);
-            h_end = min(size, c + 5)
-            h_line = "".join(game_state.board[r * size + i] for i in range(h_start, h_end)).replace(player,
-                                                                                                    'P').replace(
-                opponent, 'O')
-            if my_four in h_line.replace(' ', player): return move
-            if opp_four in h_line.replace(' ', opponent): return move
-            # ... (similar checks for Vertical, and both Diagonals would make this perfect, but are omitted for brevity. Even just horizontal is a huge boost)
+            win_check = game_state.clone();
+            win_check.make_move(move, player)
+            if win_check.check_winner(fast_check=True) == player: return move
+        for move in legal_moves:
+            block_check = game_state.clone();
+            block_check.make_move(move, opponent)
+            if block_check.check_winner(fast_check=True) == opponent: return move
 
-        # Fallback to local moves
         occupied = {i for i, spot in enumerate(game_state.board) if spot != ' '}
         if not occupied: return random.choice(legal_moves)
+
         local_moves = set()
+        size = game_state.size
         for move in occupied:
             r, c = divmod(move, size)
             for ro in [-1, 0, 1]:
@@ -178,6 +189,7 @@ class MCTS_AI:
                     nr, nc = r + ro, c + co
                     if 0 <= nr < size and 0 <= nc < size and game_state.board[nr * size + nc] == ' ':
                         local_moves.add(nr * size + nc)
+
         return random.choice(list(local_moves)) if local_moves else random.choice(legal_moves)
 
     def find_best_move(self, root_state, time_limit_ms, min_simulations):
@@ -224,7 +236,8 @@ class MCTS_AI:
 
             current_rollout_state = state.clone()
             while current_rollout_state.check_winner(fast_check=True) is None:
-                move = self._get_fast_playout_move(current_rollout_state)  # Using the new ULTRA-FAST heuristic
+                # MODIFIED: Call the new dispatcher function
+                move = self._playout(current_rollout_state)
                 if move is None: break
                 current_rollout_state.make_move(move, current_rollout_state.current_player)
                 current_rollout_state.current_player = HUMAN_PLAYER if current_rollout_state.current_player == AI_PLAYER else AI_PLAYER
