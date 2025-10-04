@@ -21,14 +21,11 @@ class GomokuGUI(tk.Tk):
         super().__init__()
         self.title("Gomoku AI")
         self.resizable(False, False)
-
         self.game = None
         self.ai = None
         self.game_over = True
         self.game_log = []
-
         self.stats = self._load_stats()
-
         self._create_widgets()
         self.after(100, self._show_settings_dialog)
 
@@ -75,29 +72,42 @@ class GomokuGUI(tk.Tk):
         dialog.title("Game Settings");
         dialog.transient(self);
         dialog.grab_set()
-        time_frame = ttk.Frame(dialog);
-        time_frame.pack(padx=20, pady=(10, 5), fill='x')
-        ttk.Label(time_frame, text="AI Thinking Time (seconds):").pack(anchor='w')
-        time_var = tk.DoubleVar(value=3.0)
-        time_label = ttk.Label(time_frame, text=f"{time_var.get():.1f} s");
-        time_label.pack(side=tk.RIGHT, padx=(10, 0))
 
-        def update_time_label(val): time_label.config(text=f"{float(val):.1f} s")
+        # --- NEW: Numeric Input Fields ---
+        settings_frame = ttk.Frame(dialog, padding=20)
+        settings_frame.pack(expand=True, fill=tk.BOTH)
 
-        time_slider = ttk.Scale(time_frame, from_=0.5, to=10.0, variable=time_var, orient='horizontal',
-                                command=update_time_label);
-        time_slider.pack(fill='x', expand=True)
+        ttk.Label(settings_frame, text="Time Limit (ms):").grid(row=0, column=0, sticky='w', pady=5)
+        time_var = tk.StringVar(value="3000")
+        ttk.Entry(settings_frame, textvariable=time_var, width=10).grid(row=0, column=1, sticky='e')
+
+        ttk.Label(settings_frame, text="Min. Simulations:").grid(row=1, column=0, sticky='w', pady=5)
+        sims_var = tk.StringVar(value="1000")
+        ttk.Entry(settings_frame, textvariable=sims_var, width=10).grid(row=1, column=1, sticky='e')
+
         ttk.Label(dialog, text="AI Difficulty Level:").pack(padx=20, pady=(10, 5), anchor='w')
-        heuristic_var = tk.StringVar(value='pattern_alphabeta')
-        ttk.Radiobutton(dialog, text="Dim Opponent", variable=heuristic_var, value='pattern_alphabeta').pack(
+        heuristic_var = tk.StringVar(value='pattern')  # Let's keep your powerful heuristic as default
+        ttk.Radiobutton(dialog, text="Tony (mediocre opponent)", variable=heuristic_var, value='pattern').pack(
             anchor='w', padx=20)
-        ttk.Radiobutton(dialog, text="Braindead Opponent", variable=heuristic_var, value='pattern').pack(anchor='w',
-                                                                                                             padx=20)
-        ttk.Radiobutton(dialog, text="Goldfish", variable=heuristic_var, value='random').pack(anchor='w',
-                                                                                                           padx=20)
+        ttk.Radiobutton(dialog, text="Goldfish (the village idiot)", variable=heuristic_var, value='random').pack(anchor='w',
+                                                                                                       padx=20)
 
         def on_start():
-            self.settings = {'time_limit_ms': int(time_var.get() * 1000), 'heuristic': heuristic_var.get()}
+            try:
+                time_limit = int(time_var.get())
+                min_sims = int(sims_var.get())
+                if time_limit < 100 or min_sims < 10:
+                    raise ValueError("Values are too low.")
+            except ValueError:
+                messagebox.showerror("Invalid Input",
+                                     "Please enter valid numbers for time (>=100) and simulations (>=10).")
+                return
+
+            self.settings = {
+                'time_limit_ms': time_limit,
+                'min_simulations': min_sims,
+                'heuristic': heuristic_var.get()
+            }
             dialog.destroy();
             self._start_new_game()
 
@@ -129,28 +139,21 @@ class GomokuGUI(tk.Tk):
             x = PADDING + i * CELL_SIZE
             self.canvas.create_line(x, PADDING, x, PADDING + (BOARD_SIZE - 1) * CELL_SIZE, fill='black')
             self.canvas.create_line(PADDING, x, PADDING + (BOARD_SIZE - 1) * CELL_SIZE, x, fill='black')
-
         for i, player in enumerate(self.game.board):
             if player != ' ':
                 row, col = divmod(i, BOARD_SIZE)
-                x0 = PADDING + col * CELL_SIZE - CELL_SIZE // 2 + 2
+                x0 = PADDING + col * CELL_SIZE - CELL_SIZE // 2 + 2;
                 y0 = PADDING + row * CELL_SIZE - CELL_SIZE // 2 + 2
-                x1 = PADDING + col * CELL_SIZE + CELL_SIZE // 2 - 2
+                x1 = PADDING + col * CELL_SIZE + CELL_SIZE // 2 - 2;
                 y1 = PADDING + row * CELL_SIZE + CELL_SIZE // 2 - 2
                 color = 'black' if player == AI_PLAYER else 'white'
                 self.canvas.create_oval(x0, y0, x1, y1, fill=color, outline='black')
-
-                # --- NEW: Highlight the last move with a central dot ---
                 if i == self.game.last_move:
-                    center_x = PADDING + col * CELL_SIZE
+                    center_x = PADDING + col * CELL_SIZE;
                     center_y = PADDING + row * CELL_SIZE
                     dot_radius = CELL_SIZE // 8
-
-                    dot_x0 = center_x - dot_radius
-                    dot_y0 = center_y - dot_radius
-                    dot_x1 = center_x + dot_radius
-                    dot_y1 = center_y + dot_radius
-
+                    dot_x0, dot_y0 = center_x - dot_radius, center_y - dot_radius
+                    dot_x1, dot_y1 = center_x + dot_radius, center_y + dot_radius
                     highlight_color = 'white' if player == AI_PLAYER else 'black'
                     self.canvas.create_oval(dot_x0, dot_y0, dot_x1, dot_y1, fill=highlight_color, outline="")
 
@@ -179,7 +182,12 @@ class GomokuGUI(tk.Tk):
         thread.start()
 
     def _ai_worker(self):
-        ai_move, root_node = self.ai.find_best_move(self.game.clone(), self.settings['time_limit_ms'])
+        # Pass both settings to the find_best_move method
+        ai_move, root_node = self.ai.find_best_move(
+            self.game.clone(),
+            self.settings['time_limit_ms'],
+            self.settings['min_simulations']
+        )
         self.after(0, self._process_ai_move, ai_move, root_node)
 
     def _process_ai_move(self, move, root_node):
@@ -268,7 +276,7 @@ class GomokuGUI(tk.Tk):
         log_text_widget.pack(expand=True, fill=tk.BOTH, padx=10, pady=10)
         formatted_log = ""
         for entry in log_data:
-            formatted_log += f"--- Turn {entry['turn']} ({entry['player']}) ---\n"
+            formatted_log += f"--- Turn {entry['turn']} ({entry['player']}) ---\n";
             formatted_log += f"Move Played: {entry['move']}\n"
             if entry['player'] == 'AI':
                 formatted_log += "\n  AI Analysis:\n";
