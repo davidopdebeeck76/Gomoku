@@ -21,13 +21,23 @@ class GomokuGUI(tk.Tk):
         super().__init__()
         self.title("Gomoku AI")
         self.resizable(False, False)
+
         self.game = None
         self.ai = None
         self.game_over = True
         self.game_log = []
+
         self.stats = self._load_stats()
         self._create_widgets()
+
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
         self.after(100, self._show_settings_dialog)
+
+    def _on_closing(self):
+        """Handle the window closing event to clean up resources."""
+        # No pool to close in this architecture, just destroy.
+        self.destroy()
 
     def _load_stats(self):
         try:
@@ -73,7 +83,6 @@ class GomokuGUI(tk.Tk):
         dialog.transient(self);
         dialog.grab_set()
 
-        # --- NEW: Numeric Input Fields ---
         settings_frame = ttk.Frame(dialog, padding=20)
         settings_frame.pack(expand=True, fill=tk.BOTH)
 
@@ -86,11 +95,9 @@ class GomokuGUI(tk.Tk):
         ttk.Entry(settings_frame, textvariable=sims_var, width=10).grid(row=1, column=1, sticky='e')
 
         ttk.Label(dialog, text="AI Difficulty Level:").pack(padx=20, pady=(10, 5), anchor='w')
-        heuristic_var = tk.StringVar(value='pattern')  # Let's keep your powerful heuristic as default
-        ttk.Radiobutton(dialog, text="Tony (mediocre opponent)", variable=heuristic_var, value='pattern').pack(
-            anchor='w', padx=20)
-        ttk.Radiobutton(dialog, text="Goldfish (the village idiot)", variable=heuristic_var, value='random').pack(anchor='w',
-                                                                                                       padx=20)
+        heuristic_var = tk.StringVar(value='pattern')
+        ttk.Radiobutton(dialog, text="Dim Opponent", variable=heuristic_var, value='pattern').pack(anchor='w', padx=20)
+        ttk.Radiobutton(dialog, text="Goldfish", variable=heuristic_var, value='random').pack(anchor='w', padx=20)
 
         def on_start():
             try:
@@ -99,8 +106,7 @@ class GomokuGUI(tk.Tk):
                 if time_limit < 100 or min_sims < 10:
                     raise ValueError("Values are too low.")
             except ValueError:
-                messagebox.showerror("Invalid Input",
-                                     "Please enter valid numbers for time (>=100) and simulations (>=10).")
+                messagebox.showerror("Invalid Input", "Please enter valid numbers for time (>=100) and simulations (>=10).")
                 return
 
             self.settings = {
@@ -173,7 +179,8 @@ class GomokuGUI(tk.Tk):
         if winner:
             self._end_game(winner)
         else:
-            self.game.current_player = AI_PLAYER; self._ai_turn()
+            self.game.current_player = AI_PLAYER;
+            self._ai_turn()
 
     def _ai_turn(self):
         self._update_turn_label();
@@ -182,7 +189,6 @@ class GomokuGUI(tk.Tk):
         thread.start()
 
     def _ai_worker(self):
-        # Pass both settings to the find_best_move method
         ai_move, root_node = self.ai.find_best_move(
             self.game.clone(),
             self.settings['time_limit_ms'],
@@ -194,9 +200,7 @@ class GomokuGUI(tk.Tk):
         analysis_data = {"total_simulations": root_node.visits, "top_moves": []}
         children = sorted(root_node.children, key=lambda n: n.visits, reverse=True)[:10]
         for child in children:
-            analysis_data["top_moves"].append(
-                {"move": child.move, "win_rate": (child.wins / child.visits * 100) if child.visits > 0 else 0,
-                 "visits": child.visits})
+            analysis_data["top_moves"].append({"move": child.move, "win_rate": (child.wins / child.visits * 100) if child.visits > 0 else 0, "visits": child.visits})
         self.game_log.append({"turn": len(self.game_log) + 1, "player": "AI", "move": move, "analysis": analysis_data})
         self.game.make_move(move, AI_PLAYER);
         self._draw_board();
@@ -205,7 +209,8 @@ class GomokuGUI(tk.Tk):
         if winner:
             self._end_game(winner)
         else:
-            self.game.current_player = HUMAN_PLAYER; self._update_turn_label()
+            self.game.current_player = HUMAN_PLAYER;
+            self._update_turn_label()
 
     def _end_game(self, winner):
         self.game_over = True;
@@ -290,7 +295,6 @@ class GomokuGUI(tk.Tk):
             formatted_log += "\n" + "=" * 40 + "\n\n"
         log_text_widget.insert(tk.END, formatted_log);
         log_text_widget.config(state=tk.DISABLED)
-
 
 if __name__ == "__main__":
     app = GomokuGUI()

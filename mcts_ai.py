@@ -7,7 +7,6 @@ from gomoku_game import AI_PLAYER, HUMAN_PLAYER
 
 
 class MCTSNode:
-    # ... (unchanged)
     def __init__(self, game_state, parent=None,
                  move=None): self.game_state = game_state; self.parent = parent; self.move = move; self.children = []; self.wins = 0; self.visits = 0; self.untried_moves = game_state.get_legal_moves()
 
@@ -25,21 +24,22 @@ class MCTSNode:
 class MCTS_AI:
     def __init__(self, heuristic_method='pattern'):
         self.heuristic_method = heuristic_method
-        self.pattern_scores = {'win': 1000000, 'block_win': 500000, 'open_four': 10000, 'block_open_four': 20000,
-                               'open_three': 5000, 'block_open_three': 50000, 'dev_own': 2, 'dev_opp': 1}
+        self.pattern_scores = {
+            'win': 1000000, 'block_win': 500000, 'open_four': 10000, 'block_open_four': 20000,
+            'open_three': 5000, 'block_open_three': 50000, 'dev_own': 2, 'dev_opp': 1
+        }
 
-    # --- Your Powerful Heuristic Functions (unchanged and correct) ---
+    # --- YOUR POWERFUL HEURISTIC FUNCTIONS ---
     def _score_move(self, game_state, move, player):
-        # ... (This is your powerful function, it is unchanged)
         opponent = HUMAN_PLAYER if player == AI_PLAYER else AI_PLAYER;
         size = game_state.size;
         score = 0
         temp_game_win = game_state.clone();
         temp_game_win.make_move(move, player)
-        if temp_game_win.check_winner() == player: return self.pattern_scores['win']
+        if temp_game_win.check_winner(fast_check=True) == player: return self.pattern_scores['win']
         temp_game_block = game_state.clone();
         temp_game_block.make_move(move, opponent)
-        if temp_game_block.check_winner() == opponent: score += self.pattern_scores['block_win']
+        if temp_game_block.check_winner(fast_check=True) == opponent: score += self.pattern_scores['block_win']
         threat_moves = self._scan_for_existing_threats(game_state.board, opponent, size)
         if move in threat_moves: score += self.pattern_scores['block_open_three'] * 10
         if self._detect_open_three_threat(game_state.board, move, opponent, size): score += self.pattern_scores[
@@ -64,7 +64,6 @@ class MCTS_AI:
         return score
 
     def _count_patterns_on_board(self, board, move, player, size, pattern, score_value):
-        # ... (unchanged)
         r, c = divmod(move, size);
         total_score = 0;
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
@@ -80,7 +79,6 @@ class MCTS_AI:
         return total_score
 
     def _get_scored_moves(self, game_state):
-        # ... (unchanged)
         moves_with_scores = []
         for move in game_state.get_legal_moves():
             score = self._score_move(game_state, move, game_state.current_player)
@@ -88,7 +86,6 @@ class MCTS_AI:
         return sorted(moves_with_scores, key=lambda x: x[0], reverse=True)
 
     def _scan_for_existing_threats(self, board, player, size):
-        # ... (unchanged)
         threat_moves = set();
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
         for pos in range(size * size):
@@ -99,7 +96,7 @@ class MCTS_AI:
                 for i in range(-2, 4):
                     nr, nc = r + i * dr, c + i * dc
                     if 0 <= nr < size and 0 <= nc < size:
-                        line_positions.append(nr * size + nc);
+                        line_positions.append(nr * size + nc)
                         cell = board[nr * size + nc];
                         line_chars.append('X' if cell == player else '_' if cell == ' ' else 'O')
                     else:
@@ -117,7 +114,6 @@ class MCTS_AI:
         return list(filter(None, threat_moves))
 
     def _detect_open_three_threat(self, board, move, player, size):
-        # ... (unchanged)
         r, c = divmod(move, size);
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)];
         temp_board = list(board);
@@ -126,71 +122,76 @@ class MCTS_AI:
             consecutive, open_ends = 1, 0
             for i in range(1, 5):
                 nr, nc = r + i * dr, c + i * dc
-                if 0 <= nr < size and 0 <= nc < size:
-                    if temp_board[nr * size + nc] == player:
-                        consecutive += 1
-                    elif temp_board[nr * size + nc] == ' ':
-                        open_ends += 1; break
-                    else:
-                        break
+                if 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == player:
+                    consecutive += 1
+                elif 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == ' ':
+                    open_ends += 1; break
                 else:
                     break
             for i in range(1, 5):
                 nr, nc = r - i * dr, c - i * dc
-                if 0 <= nr < size and 0 <= nc < size:
-                    if temp_board[nr * size + nc] == player:
-                        consecutive += 1
-                    elif temp_board[nr * size + nc] == ' ':
-                        open_ends += 1; break
-                    else:
-                        break
+                if 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == player:
+                    consecutive += 1
+                elif 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == ' ':
+                    open_ends += 1; break
                 else:
                     break
             if consecutive == 3 and open_ends == 2: return True
         return False
 
-    # --- The Fix: A Dispatcher and a Renamed Smart Heuristic ---
-
-    # NEW: This is the dispatcher function that will be called inside the simulation.
-    def _playout(self, game_state):
-        if self.heuristic_method == 'pattern':
-            return self._get_smart_playout_move(game_state)
-        else:  # 'random'
-            return random.choice(game_state.get_legal_moves())
-
-    # MODIFIED: Renamed from _get_fast_playout_move to be more specific.
-    def _get_smart_playout_move(self, game_state):
-        """A fast, lightweight heuristic for use inside simulations for 'Tony'."""
+    def _get_fast_playout_move(self, game_state):
+        """
+        ULTRA-FAST, clone-free heuristic for simulations.
+        """
         legal_moves = game_state.get_legal_moves()
         if not legal_moves: return None
-
         player = game_state.current_player
         opponent = HUMAN_PLAYER if player == AI_PLAYER else AI_PLAYER
-
-        for move in legal_moves:
-            win_check = game_state.clone();
-            win_check.make_move(move, player)
-            if win_check.check_winner(fast_check=True) == player: return move
-        for move in legal_moves:
-            block_check = game_state.clone();
-            block_check.make_move(move, opponent)
-            if block_check.check_winner(fast_check=True) == opponent: return move
-
-        occupied = {i for i, spot in enumerate(game_state.board) if spot != ' '}
-        if not occupied: return random.choice(legal_moves)
-
-        local_moves = set()
         size = game_state.size
+        board = game_state.board
+
+        # This is a much faster, clone-free way to check for immediate win/loss
+        for move in legal_moves:
+            if self._check_win_at_position(board, move, player, size): return move
+        for move in legal_moves:
+            if self._check_win_at_position(board, move, opponent, size): return move
+
+        # Fallback to local moves
+        occupied = {i for i, spot in enumerate(board) if spot != ' '}
+        if not occupied: return random.choice(legal_moves)
+        local_moves = set()
         for move in occupied:
             r, c = divmod(move, size)
             for ro in [-1, 0, 1]:
                 for co in [-1, 0, 1]:
                     if ro == 0 and co == 0: continue
                     nr, nc = r + ro, c + co
-                    if 0 <= nr < size and 0 <= nc < size and game_state.board[nr * size + nc] == ' ':
+                    if 0 <= nr < size and 0 <= nc < size and board[nr * size + nc] == ' ':
                         local_moves.add(nr * size + nc)
-
         return random.choice(list(local_moves)) if local_moves else random.choice(legal_moves)
+
+    def _check_win_at_position(self, board, pos, player, size):
+        """Fast check if placing a stone at pos would create 5 in a row."""
+        r, c = divmod(pos, size)
+        directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
+        temp_board = list(board);
+        temp_board[pos] = player  # Fast shallow copy
+        for dr, dc in directions:
+            count = 1
+            for i in range(1, 5):
+                nr, nc = r + i * dr, c + i * dc
+                if 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == player:
+                    count += 1
+                else:
+                    break
+            for i in range(1, 5):
+                nr, nc = r - i * dr, c - i * dc
+                if 0 <= nr < size and 0 <= nc < size and temp_board[nr * size + nc] == player:
+                    count += 1
+                else:
+                    break
+            if count >= 5: return True
+        return False
 
     def find_best_move(self, root_state, time_limit_ms, min_simulations):
         if not any(s != ' ' for s in root_state.board):
@@ -236,8 +237,7 @@ class MCTS_AI:
 
             current_rollout_state = state.clone()
             while current_rollout_state.check_winner(fast_check=True) is None:
-                # MODIFIED: Call the new dispatcher function
-                move = self._playout(current_rollout_state)
+                move = self._get_fast_playout_move(current_rollout_state)
                 if move is None: break
                 current_rollout_state.make_move(move, current_rollout_state.current_player)
                 current_rollout_state.current_player = HUMAN_PLAYER if current_rollout_state.current_player == AI_PLAYER else AI_PLAYER

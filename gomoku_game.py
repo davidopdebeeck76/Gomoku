@@ -48,8 +48,7 @@ class GomokuGame:
         cloned_game.last_move = self.last_move
         return cloned_game
 
-    def check_winner(self, fast_check=False): # <-- NEW PARAMETER
-        # Fast check for win based on last move
+    def check_winner(self, fast_check=False):
         if self.last_move != -1:
             player = self.board[self.last_move]
             x, y = self.last_move % self.size, self.last_move // self.size
@@ -67,15 +66,12 @@ class GomokuGame:
                 if count >= self.win_len:
                     return player
 
-        # Check for draw if board is full
         if not self.get_legal_moves():
             return 'draw'
 
-        # --- If this is a fast check for a simulation, we stop here ---
         if fast_check:
             return None
 
-        # --- Full, expensive check for unwinnable board state ---
         if self.is_unwinnable(AI_PLAYER) and self.is_unwinnable(HUMAN_PLAYER):
             return 'draw'
 
