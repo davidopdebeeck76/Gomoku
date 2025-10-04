@@ -109,18 +109,29 @@ class MCTS_AI:
             nr, nc = r + i * dr, c + i * dc
             if 0 <= nr < size and 0 <= nc < size:
                 cell = board[nr * size + nc]
-                line += str(cell) if cell != ' ' else '_'
+                if cell == ' ':
+                    line += '_'
+                elif cell == HUMAN_PLAYER:
+                    line += 'H'
+                elif cell == AI_PLAYER:
+                    line += 'A'
+                else:
+                    line += str(cell)
             else:
                 line += "#"
         return line
 
     def _has_dangerous_three_pattern(self, line, player):
-        """Check if a line contains dangerous three patterns."""
-        p = str(player)
+        """Check if a line contains dangerous three patterns (solid or broken)."""
+        # Use consistent representation: H for human, A for AI
+        p = 'H' if player == HUMAN_PLAYER else 'A'
         dangerous_patterns = [
-            f"_{p}{p}{p}_",     # _XXX_
-            f"_{p}{p}_{p}_",    # _XX_X_
-            f"_{p}_{p}{p}_",    # _X_XX_
+            f"_{p}{p}{p}_",     # _XXX_ (open three)
+            f"_{p}{p}_{p}_",    # _XX_X_ (broken three, open ends)
+            f"_{p}_{p}{p}_",    # _X_XX_ (broken three, open ends)
+            f"{p}{p}_{p}{p}",   # XX_XX (broken four - extremely dangerous!)
+            f"{p}_{p}{p}{p}",   # X_XXX (broken four)
+            f"{p}{p}{p}_{p}",   # XXX_X (broken four)
         ]
         
         for pattern in dangerous_patterns:
@@ -171,75 +182,140 @@ class MCTS_AI:
         return random.choice(list(local_moves)) if local_moves else random.choice(legal_moves)
 
     def _scan_for_existing_threats(self, board, player, size):
-        """Scan the entire board for existing threats that need to be blocked."""
-        threat_moves = []
+        """Scan the entire board for existing threats (3+ stones) that need to be blocked."""
+        threat_moves = set()
         directions = [(0, 1), (1, 0), (1, 1), (1, -1)]
 
+        # Scan from each opponent stone to find threat patterns
         for pos in range(size * size):
-            if board[pos] != ' ':
+            if board[pos] != player:
                 continue
 
             r, c = divmod(pos, size)
 
+            # For each direction, check if there's a dangerous line
             for dr, dc in directions:
-                # Check if placing a stone here would block a dangerous pattern
-                if self._would_block_threat(board, r, c, dr, dc, player, size):
-                    threat_moves.append(pos)
-                    break
+                # Get a line of 6 positions in this direction (centered on current stone)
+                line_positions = []
+                line_chars = []
 
-        return threat_moves
+                for i in range(-2, 4):
+                    nr, nc = r + i * dr, c + i * dc
+                    if 0 <= nr < size and 0 <= nc < size:
+                        line_positions.append(nr * size + nc)
+                        cell = board[nr * size + nc]
+                        if cell == player:
+                            line_chars.append('X')
+                        elif cell == ' ':
+                            line_chars.append('_')
+                        else:
+                            line_chars.append('O')
+                    else:
+                        line_positions.append(None)
+                        line_chars.append('#')
+
+                line_str = ''.join(line_chars)
+
+                # Detect dangerous patterns and mark blocking positions
+                # Solid three with open ends: _XXX_
+                if '_XXX_' in line_str:
+                    idx = line_str.index('_XXX_')
+                    # Block both ends
+                    if line_positions[idx] is not None:
+                        threat_moves.add(line_positions[idx])
+                    if line_positions[idx + 4] is not None:
+                        threat_moves.add(line_positions[idx + 4])
+
+                # Broken three patterns with open ends: _XX_X_ or _X_XX_
+                if '_XX_X_' in line_str:
+                    idx = line_str.index('_XX_X_')
+                    # Fill the gap or block the ends
+                    if line_positions[idx + 3] is not None:
+                        threat_moves.add(line_positions[idx + 3])  # Fill the gap (critical!)
+                    if line_positions[idx] is not None:
+                        threat_moves.add(line_positions[idx])  # Block left end
+                    if line_positions[idx + 5] is not None:
+                        threat_moves.add(line_positions[idx + 5])  # Block right end
+
+                if '_X_XX_' in line_str:
+                    idx = line_str.index('_X_XX_')
+                    # Fill the gap or block the ends
+                    if line_positions[idx + 2] is not None:
+                        threat_moves.add(line_positions[idx + 2])  # Fill the gap (critical!)
+                    if line_positions[idx] is not None:
+                        threat_moves.add(line_positions[idx])  # Block left end
+                    if line_positions[idx + 5] is not None:
+                        threat_moves.add(line_positions[idx + 5])  # Block right end
+
+                # Four in a row (immediate threat): _XXXX_ or _XXXX or XXXX_
+                if 'XXXX' in line_str:
+                    idx = line_str.index('XXXX')
+                    # Must block immediately
+                    if idx > 0 and line_positions[idx - 1] is not None and line_chars[idx - 1] == '_':
+                        threat_moves.add(line_positions[idx - 1])
+                    if idx + 4 < len(line_positions) and line_positions[idx + 4] is not None and line_chars[idx + 4] == '_':
+                        threat_moves.add(line_positions[idx + 4])
+
+                # Three with one open end (still dangerous): _XXX or XXX_
+                if line_str.startswith('_XXX') and len(line_str) > 4 and line_chars[4] != 'O':
+                    if line_positions[0] is not None:
+                        threat_moves.add(line_positions[0])
+                if line_str.endswith('XXX_') and len(line_str) > 4 and line_chars[-5] != 'O':
+                    if line_positions[-1] is not None:
+                        threat_moves.add(line_positions[-1])
+
+        return list(threat_moves)
 
     def _would_block_threat(self, board, r, c, dr, dc, opponent, size):
         """Check if placing a stone at (r,c) would block an opponent threat."""
-        # Look in both directions from this position
-        for direction_multiplier in [1, -1]:
-            actual_dr, actual_dc = dr * direction_multiplier, dc * direction_multiplier
+        # Check each direction independently (not just pairs)
+        consecutive = 0
+        open_ends = 0
 
-            # Count consecutive opponent stones
-            consecutive = 0
-            open_ends = 0
-
-            # Check one direction
-            i = 1
-            while i <= 4:
-                nr, nc = r + i * actual_dr, c + i * actual_dc
-                if 0 <= nr < size and 0 <= nc < size:
-                    if board[nr * size + nc] == opponent:
-                        consecutive += 1
-                        i += 1
-                    elif board[nr * size + nc] == ' ':
-                        open_ends += 1
-                        break
-                    else:
-                        break
+        # Count consecutive opponent stones in positive direction
+        i = 1
+        while i <= 4:
+            nr, nc = r + i * dr, c + i * dc
+            if 0 <= nr < size and 0 <= nc < size:
+                if board[nr * size + nc] == opponent:
+                    consecutive += 1
+                    i += 1
+                elif board[nr * size + nc] == ' ':
+                    open_ends += 1
+                    break
                 else:
                     break
+            else:
+                break
 
-            # Check opposite direction
-            i = 1
-            while i <= 4:
-                nr, nc = r - i * actual_dr, c - i * actual_dc
-                if 0 <= nr < size and 0 <= nc < size:
-                    if board[nr * size + nc] == opponent:
-                        consecutive += 1
-                        i += 1
-                    elif board[nr * size + nc] == ' ':
-                        open_ends += 1
-                        break
-                    else:
-                        break
+        # Count consecutive opponent stones in negative direction
+        i = 1
+        while i <= 4:
+            nr, nc = r - i * dr, c - i * dc
+            if 0 <= nr < size and 0 <= nc < size:
+                if board[nr * size + nc] == opponent:
+                    consecutive += 1
+                    i += 1
+                elif board[nr * size + nc] == ' ':
+                    open_ends += 1
+                    break
                 else:
                     break
+            else:
+                break
 
-            # If we have 2+ consecutive opponent stones with at least one open end, it's a threat
-            if consecutive >= 2 and open_ends >= 1:
-                return True
+        # CRITICAL: Only treat 3+ stones as a real threat
+        # Four in a row = must block or lose
+        if consecutive == 4:
+            return True
 
-            # Special case: check for patterns like O_OO where placing here blocks a future threat
-            if consecutive >= 1:
-                line = self._get_line_for_threat_analysis(board, r, c, actual_dr, actual_dc, size)
-                if self._has_blocking_value(line, opponent):
-                    return True
+        # Open three (3 stones with both ends open) = creates unstoppable threat next turn
+        if consecutive == 3 and open_ends == 2:
+            return True
+
+        # Regular three (3 stones, at least one open end) = should block
+        if consecutive == 3 and open_ends >= 1:
+            return True
 
         return False
 
@@ -252,22 +328,28 @@ class MCTS_AI:
                 line += "B"  # Blocking position
             elif 0 <= nr < size and 0 <= nc < size:
                 cell = board[nr * size + nc]
-                line += str(cell) if cell != ' ' else '_'
+                if cell == ' ':
+                    line += '_'
+                elif cell == HUMAN_PLAYER:
+                    line += 'H'
+                elif cell == AI_PLAYER:
+                    line += 'A'
+                else:
+                    line += str(cell)
             else:
                 line += "#"
         return line
 
     def _has_blocking_value(self, line, opponent):
         """Check if blocking at this position prevents dangerous patterns."""
-        opp = str(opponent)
-        # Patterns that would be blocked by placing here (B = blocking position)
+        # Use consistent representation: H for human, A for AI
+        opp = 'H' if opponent == HUMAN_PLAYER else 'A'
+        # Only check for patterns with 3+ stones that are actually dangerous
         dangerous_patterns = [
-            f"_{opp}B{opp}_",     # _XBX_ -> blocks potential _XXX_
-            f"_{opp}{opp}B_",     # _XXB_ -> blocks potential _XXX_
-            f"_B{opp}{opp}_",     # _BXX_ -> blocks potential _XXX_
-            f"{opp}B{opp}",       # XBX -> important intersection
-            f"{opp}{opp}B",       # XXB -> blocks extension
-            f"B{opp}{opp}",       # BXX -> blocks extension
+            f"_{opp}{opp}{opp}B",    # _XXXB -> blocks four
+            f"B{opp}{opp}{opp}_",    # BXXX_ -> blocks four
+            f"_{opp}{opp}B{opp}_",   # _XXBX_ -> blocks open four potential
+            f"_{opp}B{opp}{opp}_",   # _XBXX_ -> blocks open four potential
         ]
 
         for pattern in dangerous_patterns:
@@ -344,7 +426,9 @@ class MCTS_AI:
         initial_scored_moves = self._get_scored_moves(root_state)
         if initial_scored_moves:
             best_initial_score, best_initial_move = initial_scored_moves[0]
-            if best_initial_score >= self.pattern_scores['block_win']:
+            # Immediately return for critical moves: wins, blocking wins, or blocking serious threats
+            critical_threshold = self.pattern_scores['block_open_three'] * 5  # 250000
+            if best_initial_score >= critical_threshold:
                 dummy_node = MCTSNode(game_state=root_state);
                 dummy_node.visits = 1
                 child_node = dummy_node.add_child(best_initial_move, root_state);
