@@ -89,11 +89,11 @@ class GomokuGUI(tk.Tk):
         time_slider.pack(fill='x', expand=True)
         ttk.Label(dialog, text="AI Difficulty Level:").pack(padx=20, pady=(10, 5), anchor='w')
         heuristic_var = tk.StringVar(value='pattern_alphabeta')
-        ttk.Radiobutton(dialog, text="Expert (Deep Search)", variable=heuristic_var, value='pattern_alphabeta').pack(
+        ttk.Radiobutton(dialog, text="Dim Opponent", variable=heuristic_var, value='pattern_alphabeta').pack(
             anchor='w', padx=20)
-        ttk.Radiobutton(dialog, text="Strong (Pattern-Based)", variable=heuristic_var, value='pattern').pack(anchor='w',
+        ttk.Radiobutton(dialog, text="Braindead Opponent", variable=heuristic_var, value='pattern').pack(anchor='w',
                                                                                                              padx=20)
-        ttk.Radiobutton(dialog, text="Weak (Random Playout)", variable=heuristic_var, value='random').pack(anchor='w',
+        ttk.Radiobutton(dialog, text="Goldfish", variable=heuristic_var, value='random').pack(anchor='w',
                                                                                                            padx=20)
 
         def on_start():
