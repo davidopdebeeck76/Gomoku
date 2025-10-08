@@ -40,6 +40,8 @@ class MCTS_AI:
             'dev_own': 2,
             'dev_opp': 1,
         }
+        self.visualization_callback = None
+        self.visualization_enabled = False
 
     # --- YOUR POWERFUL HEURISTIC FUNCTIONS ---
     def _score_move(self, game_state, move, player):
@@ -234,6 +236,15 @@ class MCTS_AI:
                 return True
         return False
 
+    def _viz_event(self, event_type, data):
+        """Send visualization event if enabled."""
+        if self.visualization_enabled and self.visualization_callback:
+            self.visualization_callback(event_type, data)
+            # Small delay to allow GUI to process events in real-time
+            # Only delay for iteration-level events to give GUI time to render
+            if event_type in ['selection', 'expansion', 'simulation', 'backpropagation']:
+                time.sleep(0.02)  # 20ms delay allows ~50 updates/sec
+
     def find_best_move(self, root_state, time_limit_ms, min_simulations):
         if not any(s != ' ' for s in root_state.board):
             center = (root_state.size // 2) * root_state.size + (root_state.size // 2)
@@ -245,6 +256,11 @@ class MCTS_AI:
         if initial_scored_moves:
             best_initial_score, best_initial_move = initial_scored_moves[0]
             if best_initial_score >= self.pattern_scores['block_win']:
+                self._viz_event('immediate_move', {
+                    'move': best_initial_move,
+                    'score': best_initial_score,
+                    'reason': 'win' if best_initial_score == self.pattern_scores['win'] else 'block_win'
+                })
                 dummy_node = MCTSNode(game_state=root_state)
                 dummy_node.visits = 1
                 child_node = dummy_node.add_child(best_initial_move, root_state)
@@ -256,22 +272,38 @@ class MCTS_AI:
         start_time = time.monotonic()
         time_limit_secs = time_limit_ms / 1000.0
         simulations_run = 0
+
+        self._viz_event('search_start', {'time_limit_ms': time_limit_ms, 'min_simulations': min_simulations})
+
         while (time.monotonic() - start_time) < time_limit_secs or simulations_run < min_simulations:
             simulations_run += 1
+            self._viz_event('iteration_start', {'iteration': simulations_run})
+
+            # --- SELECTION PHASE ---
             node = root_node
             state = root_state.clone()
+            selection_path = []
             while not node.untried_moves and node.children:
                 node = max(node.children, key=lambda n: n.ucb1())
+                selection_path.append(node.move)
                 state.make_move(node.move, state.current_player)
                 state.current_player = HUMAN_PLAYER if state.current_player == AI_PLAYER else AI_PLAYER
+
+            if selection_path:
+                self._viz_event('selection', {'path': selection_path, 'ucb_scores': [(c.move, c.ucb1()) for c in node.parent.children if c.parent]})
+
+            # --- EXPANSION PHASE ---
             if node.untried_moves:
-                # Score untried moves from the perspective of the player to move at this node.
-                # Using the current state's player ensures immediate winning moves for that player
-                # are recognized and prioritized instead of blindly using root-scored moves.
                 scored_untried_moves = []
                 for candidate in node.untried_moves:
                     s = self._score_move(state, candidate, state.current_player)
                     scored_untried_moves.append((s, candidate))
+
+                self._viz_event('expansion', {
+                    'candidates': scored_untried_moves[:10],
+                    'node_move': node.move
+                })
+
                 if scored_untried_moves:
                     scored_untried_moves.sort(key=lambda x: x[0], reverse=True)
                     top_moves = [m for _, m in scored_untried_moves[:5]]
@@ -282,14 +314,35 @@ class MCTS_AI:
                 state.current_player = HUMAN_PLAYER if state.current_player == AI_PLAYER else AI_PLAYER
                 node = node.add_child(move, state)
 
+            # --- SIMULATION PHASE ---
             current_rollout_state = state.clone()
+            simulation_moves = []
             while current_rollout_state.check_winner(fast_check=True) is None:
                 move = self._get_fast_playout_move(current_rollout_state)
                 if move is None:
                     break
+                simulation_moves.append(move)
                 current_rollout_state.make_move(move, current_rollout_state.current_player)
                 current_rollout_state.current_player = HUMAN_PLAYER if current_rollout_state.current_player == AI_PLAYER else AI_PLAYER
             winner = current_rollout_state.check_winner(fast_check=True)
+
+            self._viz_event('simulation', {
+                'moves': simulation_moves[:5],  # Only show first 5 moves
+                'winner': winner,
+                'length': len(simulation_moves)
+            })
+
+            # --- BACKPROPAGATION PHASE ---
+            backprop_path = []
+            temp_node = node
+            while temp_node is not None:
+                backprop_path.append(temp_node.move)
+                temp_node = temp_node.parent
+
+            self._viz_event('backpropagation', {
+                'path': [m for m in backprop_path if m is not None],
+                'winner': winner
+            })
 
             while node is not None:
                 node.visits += 1
@@ -300,6 +353,12 @@ class MCTS_AI:
                     elif winner == 'draw':
                         node.wins += 0.5
                 node = node.parent
+
+        self._viz_event('search_complete', {
+            'total_iterations': simulations_run,
+            'time_elapsed': (time.monotonic() - start_time) * 1000
+        })
+
         if not root_node.children:
             return random.choice(root_state.get_legal_moves()), root_node
         best_child = max(root_node.children, key=lambda n: n.visits)

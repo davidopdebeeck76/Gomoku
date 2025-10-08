@@ -4,6 +4,7 @@ from tkinter import ttk, messagebox, Toplevel, scrolledtext
 import json
 import threading
 import random
+import queue
 
 from gomoku_game import GomokuGame, AI_PLAYER, HUMAN_PLAYER
 from mcts_ai import MCTS_AI
@@ -28,9 +29,19 @@ class GomokuGUI(tk.Tk):
         self.game_log = []
 
         self.stats = self._load_stats()
+
+        # Visualization state
+        self.viz_enabled = False
+        self.viz_queue = queue.Queue()
+        self.viz_update_rate = 10  # Process every Nth iteration
+        self.ghost_pieces = []  # Track canvas items for ghost pieces
+
         self._create_widgets()
 
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
+
+        # Start visualization processing loop
+        self._process_viz_queue()
 
         self.after(100, self._show_settings_dialog)
 
@@ -58,7 +69,12 @@ class GomokuGUI(tk.Tk):
         board_frame = ttk.Frame(main_frame);
         board_frame.pack(side=tk.LEFT, padx=(0, 10))
         self.info_frame = ttk.Frame(main_frame, width=200);
-        self.info_frame.pack(side=tk.RIGHT, fill=tk.Y)
+        self.info_frame.pack(side=tk.LEFT, fill=tk.Y)
+
+        # Visualization panel
+        self.viz_frame = ttk.Frame(main_frame, width=300)
+        self.viz_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
         canvas_size = (BOARD_SIZE - 1) * CELL_SIZE + 2 * PADDING
         self.canvas = tk.Canvas(board_frame, width=canvas_size, height=canvas_size, bg='#d2b48c');
         self.canvas.pack()
@@ -76,6 +92,51 @@ class GomokuGUI(tk.Tk):
         button_frame.pack(pady=10, fill='x')
         ttk.Button(button_frame, text="New Game", command=self._show_settings_dialog).pack(fill='x')
         ttk.Button(button_frame, text="View Last Game Log", command=self._show_log_window).pack(fill='x', pady=(5, 0))
+
+        # --- Visualization Panel ---
+        ttk.Label(self.viz_frame, text="MCTS Visualization", font=("Arial", 14, "bold")).pack(pady=5)
+
+        # Visualization controls
+        control_frame = ttk.Frame(self.viz_frame)
+        control_frame.pack(fill='x', padx=5, pady=5)
+
+        self.viz_enabled_var = tk.BooleanVar(value=False)
+        viz_toggle = ttk.Checkbutton(control_frame, text="Enable Visualization",
+                                       variable=self.viz_enabled_var,
+                                       command=self._toggle_visualization)
+        viz_toggle.pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(control_frame, text="Update Rate:").pack(side=tk.LEFT, padx=(10, 2))
+        self.viz_rate_var = tk.StringVar(value="10")
+        rate_spin = ttk.Spinbox(control_frame, from_=1, to=100, width=5,
+                                 textvariable=self.viz_rate_var,
+                                 command=self._update_viz_rate)
+        rate_spin.pack(side=tk.LEFT)
+
+        # Visualization text output with scrollbar
+        viz_scroll_frame = ttk.Frame(self.viz_frame)
+        viz_scroll_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        scrollbar = ttk.Scrollbar(viz_scroll_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.viz_text = tk.Text(viz_scroll_frame, width=40, height=35,
+                                 font=("Courier", 8), wrap=tk.WORD,
+                                 yscrollcommand=scrollbar.set)
+        self.viz_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.viz_text.yview)
+
+        # Configure text tags for coloring
+        self.viz_text.tag_config("phase", foreground="#0066cc", font=("Courier", 8, "bold"))
+        self.viz_text.tag_config("selection", foreground="#009900")
+        self.viz_text.tag_config("expansion", foreground="#cc6600")
+        self.viz_text.tag_config("simulation", foreground="#9900cc")
+        self.viz_text.tag_config("backprop", foreground="#cc0000")
+        self.viz_text.tag_config("info", foreground="#666666")
+
+        clear_btn = ttk.Button(self.viz_frame, text="Clear Visualization Log",
+                               command=self._clear_viz_log)
+        clear_btn.pack(pady=5)
 
     def _show_settings_dialog(self):
         dialog = Toplevel(self);
@@ -128,6 +189,11 @@ class GomokuGUI(tk.Tk):
         first_player = random.choice([HUMAN_PLAYER, AI_PLAYER])
         self.game = GomokuGame(size=BOARD_SIZE, current_player=first_player)
         self.ai = MCTS_AI(heuristic_method=self.settings.get('heuristic', 'pattern'))
+
+        # Set up visualization callback
+        self.ai.visualization_callback = self._viz_callback
+        self.ai.visualization_enabled = self.viz_enabled
+
         self.game_over = False;
         self._draw_board();
         self._update_stats_text()
@@ -175,16 +241,19 @@ class GomokuGUI(tk.Tk):
         self.game_log.append({"turn": len(self.game_log) + 1, "player": "Human", "move": move})
         self.game.make_move(move, HUMAN_PLAYER);
         self._draw_board()
+        self.update_idletasks()  # Force immediate drawing of human move
         winner = self.game.check_winner()
         if winner:
             self._end_game(winner)
         else:
             self.game.current_player = AI_PLAYER;
-            self._ai_turn()
+            self.after(10, self._ai_turn)  # Small delay to ensure UI updates
 
     def _ai_turn(self):
         self._update_turn_label();
         self._update_mcts_text("AI is thinking...")
+        self._clear_ghost_pieces()  # Clear any lingering ghost pieces
+        self.update_idletasks()  # Force UI update before AI starts
         thread = threading.Thread(target=self._ai_worker, daemon=True);
         thread.start()
 
@@ -295,6 +364,160 @@ class GomokuGUI(tk.Tk):
             formatted_log += "\n" + "=" * 40 + "\n\n"
         log_text_widget.insert(tk.END, formatted_log);
         log_text_widget.config(state=tk.DISABLED)
+
+    # --- Visualization Methods ---
+    def _toggle_visualization(self):
+        """Toggle visualization on/off."""
+        self.viz_enabled = self.viz_enabled_var.get()
+        if self.ai:
+            self.ai.visualization_enabled = self.viz_enabled
+        if self.viz_enabled:
+            self._append_viz_text("=== Visualization Enabled ===\n", "phase")
+        else:
+            self._append_viz_text("=== Visualization Disabled ===\n", "info")
+            self._clear_ghost_pieces()
+
+    def _update_viz_rate(self):
+        """Update the visualization update rate."""
+        try:
+            self.viz_update_rate = int(self.viz_rate_var.get())
+        except ValueError:
+            self.viz_update_rate = 10
+
+    def _clear_viz_log(self):
+        """Clear the visualization text log."""
+        self.viz_text.delete(1.0, tk.END)
+
+    def _append_viz_text(self, text, tag=None):
+        """Append text to the visualization log."""
+        self.viz_text.insert(tk.END, text, tag)
+        self.viz_text.see(tk.END)
+
+    def _viz_callback(self, event_type, data):
+        """Callback for visualization events from MCTS."""
+        if not self.viz_enabled:
+            return
+
+        # Filter events BEFORE queueing to avoid queue buildup
+        iteration = data.get('iteration', 0)
+        if event_type in ['selection', 'expansion', 'simulation', 'backpropagation', 'iteration_start']:
+            if iteration % self.viz_update_rate != 0:
+                return
+
+        # Limit queue size to prevent memory issues
+        if self.viz_queue.qsize() < 1000:
+            self.viz_queue.put((event_type, data))
+
+    def _process_viz_queue(self):
+        """Process visualization events from the queue."""
+        try:
+            # Process up to 10 events per cycle to avoid overwhelming the UI
+            for _ in range(10):
+                if not self.viz_queue.empty():
+                    event_type, data = self.viz_queue.get_nowait()
+                    self._handle_viz_event(event_type, data)
+                else:
+                    break
+        except queue.Empty:
+            pass
+        finally:
+            # Schedule next processing - faster cycle for real-time updates
+            self.after(16, self._process_viz_queue)  # ~60fps
+
+    def _handle_viz_event(self, event_type, data):
+        """Handle a visualization event."""
+        if event_type == 'search_start':
+            self._append_viz_text(f"\n{'='*40}\n", "phase")
+            self._append_viz_text(f"SEARCH START\n", "phase")
+            self._append_viz_text(f"Time limit: {data['time_limit_ms']}ms, Min sims: {data['min_simulations']}\n", "info")
+            self._append_viz_text(f"{'='*40}\n\n", "phase")
+
+        elif event_type == 'immediate_move':
+            self._append_viz_text(f"IMMEDIATE MOVE DETECTED\n", "phase")
+            self._append_viz_text(f"Move: {data['move']}, Reason: {data['reason']}, Score: {data['score']}\n\n", "info")
+
+        elif event_type == 'iteration_start':
+            if data['iteration'] % self.viz_update_rate == 0:
+                self._append_viz_text(f"--- Iteration {data['iteration']} ---\n", "info")
+
+        elif event_type == 'selection':
+            self._append_viz_text(f"  SELECTION: ", "phase")
+            path_str = " -> ".join(str(m) for m in data['path'][:3])
+            if len(data['path']) > 3:
+                path_str += f" ... ({len(data['path'])} moves)"
+            self._append_viz_text(f"{path_str}\n", "selection")
+            self._draw_ghost_path(data['path'], 'selection')
+
+        elif event_type == 'expansion':
+            self._append_viz_text(f"  EXPANSION: ", "phase")
+            top_candidates = data['candidates'][:3]
+            cand_str = ", ".join(f"{m}({s})" for s, m in top_candidates)
+            self._append_viz_text(f"{cand_str}\n", "expansion")
+            self._draw_ghost_candidates([m for _, m in top_candidates], 'expansion')
+
+        elif event_type == 'simulation':
+            self._append_viz_text(f"  SIMULATION: ", "phase")
+            self._append_viz_text(f"{len(data['moves'])} moves, winner: {data['winner']}\n", "simulation")
+            if data['moves']:
+                self._draw_ghost_path(data['moves'], 'simulation')
+
+        elif event_type == 'backpropagation':
+            self._append_viz_text(f"  BACKPROP: ", "phase")
+            path_str = " <- ".join(str(m) for m in data['path'][:3])
+            if len(data['path']) > 3:
+                path_str += f" ... ({len(data['path'])} nodes)"
+            self._append_viz_text(f"{path_str}, winner: {data['winner']}\n\n", "backprop")
+
+        elif event_type == 'search_complete':
+            self._append_viz_text(f"\n{'='*40}\n", "phase")
+            self._append_viz_text(f"SEARCH COMPLETE\n", "phase")
+            self._append_viz_text(f"Total iterations: {data['total_iterations']}, Time: {data['time_elapsed']:.1f}ms\n", "info")
+            self._append_viz_text(f"{'='*40}\n\n", "phase")
+            self._clear_ghost_pieces()
+
+    def _clear_ghost_pieces(self):
+        """Clear all ghost pieces from the board."""
+        for item in self.ghost_pieces:
+            self.canvas.delete(item)
+        self.ghost_pieces = []
+
+    def _draw_ghost_path(self, moves, phase):
+        """Draw ghost pieces for a path of moves."""
+        if not self.game:
+            return
+        self._clear_ghost_pieces()
+
+        colors = {
+            'selection': '#90EE90',  # Light green
+            'simulation': '#DDA0DD',  # Plum
+            'expansion': '#FFB366'    # Light orange
+        }
+        color = colors.get(phase, '#CCCCCC')
+
+        for i, move in enumerate(moves[:5]):  # Only show first 5
+            if move is None:
+                continue
+            row, col = divmod(move, BOARD_SIZE)
+            x0 = PADDING + col * CELL_SIZE - CELL_SIZE // 3
+            y0 = PADDING + row * CELL_SIZE - CELL_SIZE // 3
+            x1 = PADDING + col * CELL_SIZE + CELL_SIZE // 3
+            y1 = PADDING + row * CELL_SIZE + CELL_SIZE // 3
+
+            # Fade opacity for later moves
+            opacity = 255 - (i * 40)
+            if opacity < 100:
+                opacity = 100
+
+            item = self.canvas.create_oval(x0, y0, x1, y1,
+                                           fill=color,
+                                           outline='gray',
+                                           stipple='gray50',
+                                           tags='ghost')
+            self.ghost_pieces.append(item)
+
+    def _draw_ghost_candidates(self, moves, phase):
+        """Draw ghost pieces for candidate moves."""
+        self._draw_ghost_path(moves, phase)
 
 if __name__ == "__main__":
     app = GomokuGUI()
